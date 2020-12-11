@@ -1,0 +1,4 @@
+tqdm
+numpy
+jaconv
+tensorflow==1.15
