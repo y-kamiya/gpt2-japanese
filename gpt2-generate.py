@@ -115,6 +115,7 @@ with tf.Session(config=config, graph=tf.Graph()) as sess:
     with open(args.output_file, 'w') as of:
         for pre_text in contexts:
             for i in range(args.num_generate):
+                print(f"start generation pre_text: {pre_text}, count: {i}")
                 generated = generate_one(sess, output, pre_text)
                 generated = generated.replace('\n', '')
                 of.write(f"{pre_text}{generated}\n")
