@@ -168,6 +168,8 @@ def model(hparams, X, past=None, scope='model', reuse=tf.AUTO_REUSE):
         results['present'] = tf.stack(presents, axis=1)
         h = norm(h, 'ln_f')
 
+        results['h_eos'] = tf.reshape(h[:, sequence-1, :], [batch, hparams.n_embd])
+
         # Language model loss.  Do tokens <n predict token n?
         h_flat = tf.reshape(h, [batch*sequence, hparams.n_embd])
         results['h_flat'] = h_flat
@@ -175,3 +177,25 @@ def model(hparams, X, past=None, scope='model', reuse=tf.AUTO_REUSE):
         logits = tf.reshape(logits, [batch, sequence, hparams.n_vocab])
         results['logits'] = logits
         return results
+
+
+def sentence_classification_head(hparams, x, n_output):
+    with tf.variable_scope("FC{0}".format(1)):
+        return fc(hparams, x, n_output, 'out')
+
+def fc(hparams, input, output, i=None):
+    d_fc_w, d_fc_b = _fc_variable([hparams.n_embd,output],name="fc{0}".format(i))
+    fc = tf.matmul( input , d_fc_w) + d_fc_b
+    return fc
+
+def _fc_variable(weight_shape, name="fc"):
+    with tf.variable_scope(name):
+        # check weight_shape
+        input_channels  = int(weight_shape[0])
+        output_channels = int(weight_shape[1])
+        weight_shape    = ( input_channels, output_channels)
+        # define variables
+        weight = tf.get_variable("w", weight_shape     , initializer=tf.contrib.layers.xavier_initializer())
+        bias   = tf.get_variable("b", [weight_shape[1]], initializer=tf.constant_initializer(0.0))
+
+    return weight, bias

@@ -11,6 +11,7 @@ from copy import copy
 from tensorflow.contrib.training import HParams
 from encode_bpe import BPEEncoder_ja
 import model
+import csv
 
 CHECKPOINT_DIR = 'checkpoint'
 SAMPLE_DIR = 'samples'
@@ -32,6 +33,9 @@ parser.add_argument('--save_every', metavar='N', type=int, default=1000, help='W
 
 parser.add_argument('--gpu', default='0', help='visible gpu number.')
 
+parser.add_argument('--n_sentence_labels', type=int, default=0, help='label num for sentence classification')
+parser.add_argument('--epochs', type=int, default=100)
+
 def maketree(path):
     try:
         os.makedirs(path)
@@ -46,6 +50,42 @@ with open('emoji.json') as f:
 
 enc = BPEEncoder_ja(bpe, emoji)
 n_vocab = len(enc)
+
+label_index_map = {
+    'anger': 0,
+    'disgust': 1,
+    'joy': 2,
+    'sadness': 3,
+    'surprise': 4,
+}
+
+
+class Dataset():
+    def __init__(self, args, hparams, filename):
+        self.args = args
+        self.hparams = hparams
+        self.filename = filename
+
+        self.global_chunks, self.global_label_ids = self.__load_data()
+        self.global_chunk_index = np.random.permutation(len(self.global_chunks))
+        self.global_chunk_step = 0
+
+    def __load_data(self):
+        input_ids = []
+        label_ids = []
+        input_path = os.path.join(self.args.dataset, self.filename)
+        with open(input_path, 'r') as fp:
+            reader = csv.reader(fp, delimiter='\t')
+            for text, label in reader:
+                input_ids.append(enc.encode(text)[:self.hparams.n_ctx])
+                label_ids.append(label_index_map[label])
+
+        return input_ids, label_ids
+
+
+def evaluate(args, hparams):
+    input_ids, label_ids = load_data_for_classification(args, hparams, 'eval.txt')
+
 
 def main():
     args = parser.parse_args()
@@ -83,16 +123,30 @@ def main():
         config.gpu_options.visible_device_list = args.gpu
     with tf.Session(config=config,graph=tf.Graph()) as sess:
         context = tf.placeholder(tf.int32, [None, None])
-        output = model.model(hparams=hparams, X=context, past=None, reuse=tf.AUTO_REUSE)
-        loss = tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=context[:, 1:], logits=output['logits'][:, :-1]))
+        labels = tf.placeholder(tf.int32, [None])
+        output = model.model(hparams=hparams, X=context, past=None , reuse=tf.AUTO_REUSE)
 
-        saver = tf.train.Saver()
+        saver = tf.train.Saver(
+            var_list=tf.trainable_variables(),
+            max_to_keep=5,
+            keep_checkpoint_every_n_hours=2)
+        sess.run(tf.global_variables_initializer())
+
         ckpt = tf.train.latest_checkpoint(args.base_model)
         saver.restore(sess, ckpt)
+        print('Loading checkpoint', ckpt)
+        # saver = tf.train.Saver()
+        # ckpt = tf.train.latest_checkpoint(args.base_model)
+        # saver.restore(sess, ckpt)
 
-        train_vars = tf.trainable_variables()
+        logits = model.sentence_classification_head(hparams, output['h_eos'], args.n_sentence_labels)
+
+        loss = tf.reduce_mean(
+            tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=labels, logits=logits))
+
+        preds = tf.math.argmax(logits, 1)
+        accuracy_op = tf.reduce_mean(tf.cast(preds == labels, tf.float32))
 
         global_step = tf.Variable(0, trainable=False)
         if args.warmup_steps > 0:
@@ -122,7 +176,8 @@ def main():
         opt_grads = list(zip(opt_grads, train_vars))
         opt_apply = opt.apply_gradients(opt_grads)
 
-        summaries = tf.summary.scalar('loss', loss)
+        summaries_train = tf.summary.scalar('train/loss', loss)
+        summaries_eval = tf.summary.scalar('eval/loss', loss)
         summary_log = tf.summary.FileWriter(
             os.path.join(CHECKPOINT_DIR, args.run_name))
 
@@ -130,43 +185,36 @@ def main():
             var_list=train_vars,
             max_to_keep=5,
             keep_checkpoint_every_n_hours=2)
-        sess.run(tf.global_variables_initializer())
 
-        ckpt = tf.train.latest_checkpoint(args.base_model)
-        saver.restore(sess, ckpt)
-        print('Loading checkpoint', ckpt)
+        global_vars = tf.global_variables()
+        is_not_initialized = sess.run([tf.is_variable_initialized(var) for var in global_vars])
+        not_initialized_vars = [v for (v, f) in zip(global_vars, is_not_initialized) if not f]
+        sess.run(tf.variables_initializer(not_initialized_vars))
 
-        print('Loading dataset...')
-        global_chunks = []
-        with np.load(args.dataset) as npz:
-            for inditem, item in enumerate(npz.files):
-                token_chunk = npz[item]
-                current_token = []
-                for ind in range(0,len(token_chunk)):
-                  current_token.append(np.uint16(token_chunk[ind]))
-                  if len(current_token) == hparams.n_ctx:
-                      global_chunks.append(current_token)
-                      current_token = []
-        global_chunk_index = np.random.permutation(len(global_chunks))
-        global_chunk_step = 0
-        print('Training...')
+        dataset_train = Dataset(args, hparams, 'train.txt')
+        dataset_eval = Dataset(args, hparams, 'eval.txt')
 
-        def sample_feature():
-            nonlocal global_chunks,global_chunk_index,global_chunk_step
+        def sample_feature(dataset):
             p_input_ids = []
+            p_label_ids = []
 
             for b in range(args.batch_size): # FULL-SENTENCES
-                idx = global_chunk_index[global_chunk_step]
-                global_chunk_step += 1
-                if global_chunk_step >= len(global_chunk_index):
-                    global_chunk_step = 0
-                    global_chunk_index = np.random.permutation(len(global_chunks))
-                sampled_token = global_chunks[idx]
-                # Make Sequence
-                ids = copy(global_chunks[idx])
-                p_input_ids.append(ids)
+                idx = dataset.global_chunk_index[dataset.global_chunk_step]
+                dataset.global_chunk_step += 1
+                if dataset.global_chunk_step >= len(dataset.global_chunk_index):
+                    dataset.global_chunk_step = 0
+                    dataset.global_chunk_index = np.random.permutation(len(dataset.global_chunks))
 
-            return {context:p_input_ids}
+                p_input_ids.append(copy(dataset.global_chunks[idx]))
+                p_label_ids.append(copy(dataset.global_label_ids[idx]))
+
+            if args.n_sentence_labels == 0:
+                return {context:p_input_ids}
+
+            return {context:p_input_ids, labels:p_label_ids}
+
+
+        print('Training...')
 
         counter = 1
         counter_path = os.path.join(CHECKPOINT_DIR, args.run_name, 'counter')
@@ -197,11 +245,22 @@ def main():
         try:
             while True:
                 if counter % args.save_every == 0:
+                    (v_accuracy, v_loss, v_summary) = sess.run(
+                        (accuracy_op, loss, summaries_eval),
+                        feed_dict=sample_feature(dataset_eval))
+                    print(
+                        '[eval][{counter} | {time:2.2f}] loss={loss:2.2f} acc={acc:2.2f}'
+                        .format(
+                            counter=counter,
+                            time=time.time() - start_time,
+                            loss=v_loss,
+                            acc=v_accuracy))
+                    summary_log.add_summary(v_summary, counter)
                     save()
 
                 (_, v_loss, v_summary) = sess.run(
-                    (opt_apply, loss, summaries),
-                    feed_dict=sample_feature())
+                    (opt_apply, loss, summaries_train),
+                    feed_dict=sample_feature(dataset_train))
 
                 summary_log.add_summary(v_summary, counter)
 
@@ -219,6 +278,7 @@ def main():
                 counter = counter+1
                 if args.warmup_steps > 0:
                     global_step = global_step+1
+
         except KeyboardInterrupt:
             print('interrupted')
             save()
