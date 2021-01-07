@@ -51,7 +51,7 @@ with open('emoji.json') as f:
 enc = BPEEncoder_ja(bpe, emoji)
 n_vocab = len(enc)
 
-label_index_map = {
+LABEL_INDEX_MAP = {
     'anger': 0,
     'disgust': 1,
     'joy': 2,
@@ -59,6 +59,7 @@ label_index_map = {
     'surprise': 4,
 }
 
+TOKEN_ID_EOT = enc.encode('<|endoftext|>')[0]
 
 class Dataset():
     def __init__(self, args, hparams, filename):
@@ -78,7 +79,7 @@ class Dataset():
             reader = csv.reader(fp, delimiter='\t')
             for text, label in reader:
                 input_ids.append(enc.encode(text)[:self.hparams.n_ctx])
-                label_ids.append(label_index_map[label])
+                label_ids.append(LABEL_INDEX_MAP[label])
 
         return input_ids, label_ids
 
@@ -124,6 +125,7 @@ def main():
     with tf.Session(config=config,graph=tf.Graph()) as sess:
         context = tf.placeholder(tf.int32, [None, None])
         labels = tf.placeholder(tf.int32, [None])
+        eos_indices = tf.placeholder(tf.int32, [None, 2])
         output = model.model(hparams=hparams, X=context, past=None , reuse=tf.AUTO_REUSE)
 
         saver = tf.train.Saver(
@@ -139,7 +141,7 @@ def main():
         # ckpt = tf.train.latest_checkpoint(args.base_model)
         # saver.restore(sess, ckpt)
 
-        logits = model.sentence_classification_head(hparams, output['h_eos'], args.n_sentence_labels)
+        logits = model.sentence_classification_head(hparams, output['h_norm'], eos_indices, args.n_sentence_labels)
 
         loss = tf.reduce_mean(
             tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -211,7 +213,20 @@ def main():
             if args.n_sentence_labels == 0:
                 return {context:p_input_ids}
 
-            return {context:p_input_ids, labels:p_label_ids}
+            sentence_lengths = []
+            max_length = max([len(ids) for ids in p_input_ids])
+            for i in range(len(p_input_ids)):
+                length = len(p_input_ids[i])
+                n_diff = max_length - length + 1
+                p_input_ids[i].extend([TOKEN_ID_EOT] * n_diff)
+                sentence_lengths.append(length)
+
+            p_eos_indices = list(zip(range(len(sentence_lengths)), sentence_lengths))
+            # print('nnnnnnnnnnnnnnnnnnnnnnnnnn')
+            # print(p_input_ids)
+            # print(p_label_ids)
+            # print(p_eos_indices)
+            return {context:p_input_ids, labels:p_label_ids, eos_indices:p_eos_indices}
 
 
         print('Training...')
