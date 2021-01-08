@@ -146,9 +146,12 @@ def main():
         loss = tf.reduce_mean(
             tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=labels, logits=logits))
+        tf.summary.scalar('train/loss', loss, collections=['train'])
+        tf.summary.scalar('eval/loss', loss, collections=['eval'])
 
-        preds = tf.math.argmax(logits, 1)
-        accuracy_op = tf.reduce_mean(tf.cast(preds == labels, tf.float32))
+        preds = tf.cast(tf.math.argmax(logits, 1), tf.int32)
+        accuracy= tf.reduce_mean(tf.cast(tf.equal(preds, labels), tf.float32))
+        tf.summary.scalar('eval/accuracy', accuracy, collections=['eval'])
 
         global_step = tf.Variable(0, trainable=False)
         if args.warmup_steps > 0:
@@ -178,9 +181,9 @@ def main():
         opt_grads = list(zip(opt_grads, train_vars))
         opt_apply = opt.apply_gradients(opt_grads)
 
-        summaries_train = tf.summary.scalar('train/loss', loss)
-        summaries_eval = tf.summary.scalar('eval/loss', loss)
-        summary_log = tf.summary.FileWriter(
+        summaries_train = tf.summary.merge_all('train')
+        summaries_eval = tf.summary.merge_all('eval')
+        summary_writer = tf.summary.FileWriter(
             os.path.join(CHECKPOINT_DIR, args.run_name))
 
         saver = tf.train.Saver(
@@ -261,7 +264,7 @@ def main():
             while True:
                 if counter % args.save_every == 0:
                     (v_accuracy, v_loss, v_summary) = sess.run(
-                        (accuracy_op, loss, summaries_eval),
+                        (accuracy, loss, summaries_eval),
                         feed_dict=sample_feature(dataset_eval))
                     print(
                         '[eval][{counter} | {time:2.2f}] loss={loss:2.2f} acc={acc:2.2f}'
@@ -270,14 +273,14 @@ def main():
                             time=time.time() - start_time,
                             loss=v_loss,
                             acc=v_accuracy))
-                    summary_log.add_summary(v_summary, counter)
+                    summary_writer.add_summary(v_summary, counter)
                     save()
 
                 (_, v_loss, v_summary) = sess.run(
                     (opt_apply, loss, summaries_train),
                     feed_dict=sample_feature(dataset_train))
 
-                summary_log.add_summary(v_summary, counter)
+                summary_writer.add_summary(v_summary, counter)
 
                 avg_loss = (avg_loss[0] * 0.99 + v_loss,
                             avg_loss[1] * 0.99 + 1.0)
