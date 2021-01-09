@@ -11,6 +11,8 @@ from tensorflow.contrib.training import HParams
 from encode_bpe import BPEEncoder_ja
 import model
 import csv
+import pandas as pd
+from tabulate import tabulate
 
 # for confusion matrix
 from textwrap import wrap
@@ -18,7 +20,7 @@ import re
 import itertools
 import tfplot
 import matplotlib
-from sklearn.metrics import confusion_matrix
+from sklearn import metrics
 
 CHECKPOINT_DIR = 'checkpoint'
 SAMPLE_DIR = 'samples'
@@ -331,12 +333,20 @@ def main():
             label_names = [index_label_map[i] for i in feed_dict[labels]]
             pred_names = [index_label_map[i] for i in v_preds]
 
-            cm = confusion_matrix(label_names, pred_names, labels=all_label_names, normalize='true')
+            cm = metrics.confusion_matrix(label_names, pred_names, labels=all_label_names, normalize='true')
             print(f'confusion matrix: {all_label_names}')
             print(cm)
 
             v_summary_cm = plot_confusion_matrix(cm, all_label_names, tensor_name='eval/cm')
             summary_writer.add_summary(v_summary_cm, counter)
+
+            df = pd.DataFrame(metrics.classification_report(feed_dict[labels], v_preds, output_dict=True))
+            print(tabulate(df, headers='keys', tablefmt="github", floatfmt='.2f'))
+
+            f1_macro = df.loc['f1-score', 'macro avg']
+            summary_writer.add_summary(tf.Summary(value=[
+                tf.Summary.Value(tag='eval/f1_macro', simple_value=f1_macro)
+             ]), counter)
 
         try:
             while counter <= args.steps:
