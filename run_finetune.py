@@ -42,7 +42,7 @@ parser.add_argument('--log_every', metavar='N', type=int, default=1, help='print
 parser.add_argument('--gpu', default='0', help='visible gpu number.')
 
 parser.add_argument('--n_sentence_labels', type=int, default=0, help='label num for sentence classification')
-parser.add_argument('--epochs', type=int, default=100)
+parser.add_argument('--steps', type=int, default=10)
 
 def maketree(path):
     try:
@@ -312,34 +312,36 @@ def main():
         avg_loss = (0.0, 0.0)
         start_time = time.time()
 
+        def evaluate():
+            feed_dict = sample_feature(dataset_eval)
+            (v_accuracy, v_loss, v_summary, v_preds) = sess.run(
+                (accuracy, loss, summaries_eval, preds),
+                feed_dict=feed_dict)
+            print(
+                '[eval][{counter} | {time:2.2f}] loss={loss:2.2f} acc={acc:2.2f}'
+                .format(
+                    counter=counter,
+                    time=time.time() - start_time,
+                    loss=v_loss,
+                    acc=v_accuracy))
+            summary_writer.add_summary(v_summary, counter)
+
+            index_label_map = {v:k for k,v in LABEL_INDEX_MAP.items()}
+            all_label_names = list(LABEL_INDEX_MAP.keys())
+            label_names = [index_label_map[i] for i in feed_dict[labels]]
+            pred_names = [index_label_map[i] for i in v_preds]
+
+            cm = confusion_matrix(label_names, pred_names, labels=all_label_names, normalize='true')
+            print(f'confusion matrix: {all_label_names}')
+            print(cm)
+
+            v_summary_cm = plot_confusion_matrix(cm, all_label_names, tensor_name='eval/cm')
+            summary_writer.add_summary(v_summary_cm, counter)
+
         try:
-            while True:
+            while counter <= args.steps:
                 if counter % args.save_every == 0:
-                    feed_dict = sample_feature(dataset_eval)
-                    (v_accuracy, v_loss, v_summary, v_preds) = sess.run(
-                        (accuracy, loss, summaries_eval, preds),
-                        feed_dict=feed_dict)
-                    print(
-                        '[eval][{counter} | {time:2.2f}] loss={loss:2.2f} acc={acc:2.2f}'
-                        .format(
-                            counter=counter,
-                            time=time.time() - start_time,
-                            loss=v_loss,
-                            acc=v_accuracy))
-                    summary_writer.add_summary(v_summary, counter)
-
-                    index_label_map = {v:k for k,v in LABEL_INDEX_MAP.items()}
-                    all_label_names = list(LABEL_INDEX_MAP.keys())
-                    label_names = [index_label_map[i] for i in feed_dict[labels]]
-                    pred_names = [index_label_map[i] for i in v_preds]
-
-                    cm = confusion_matrix(label_names, pred_names, labels=all_label_names, normalize='true')
-                    print(f'confusion matrix: {all_label_names}')
-                    print(cm)
-
-                    v_summary_cm = plot_confusion_matrix(cm, all_label_names, tensor_name='eval/cm')
-                    summary_writer.add_summary(v_summary_cm, counter)
-
+                    evaluate()
                     save()
 
                 (_, v_loss, v_summary) = sess.run(
@@ -363,6 +365,9 @@ def main():
                 counter = counter+1
                 if args.warmup_steps > 0:
                     global_step = global_step+1
+
+            evaluate()
+            save()
 
         except KeyboardInterrupt:
             print('interrupted')
