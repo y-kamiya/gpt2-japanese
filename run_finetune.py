@@ -27,7 +27,7 @@ parser = argparse.ArgumentParser(
     description='Pretraining GPT2-JA on your custom dataset.',
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-parser.add_argument('--dataset', metavar='PATH', type=str, required=True, help='Input npz file')
+parser.add_argument('--dataroot', metavar='PATH', type=str, required=True, help='root directory for data')
 parser.add_argument('--base_model', type=str, default='gpt2ja-small', help='a path to a model file')
 
 parser.add_argument('--batch_size', metavar='SIZE', type=int, default=1, help='Batch size')
@@ -81,7 +81,7 @@ class Dataset():
     def __load_data(self):
         input_ids = []
         label_ids = []
-        input_path = os.path.join(self.args.dataset, self.filename)
+        input_path = os.path.join(self.args.dataroot, self.filename)
         with open(input_path, 'r') as fp:
             reader = csv.reader(fp, delimiter='\t')
             for text, label in reader:
@@ -143,6 +143,7 @@ def main():
     np.set_printoptions(precision=3)
 
     args = parser.parse_args()
+    args.output_dir = os.path.join(args.dataroot, CHECKPOINT_DIR, args.run_name)
 
     if 'small' in args.base_model:
         hparams = HParams(**{
@@ -237,8 +238,7 @@ def main():
 
         summaries_train = tf.summary.merge_all('train')
         summaries_eval = tf.summary.merge_all('eval')
-        summary_writer = tf.summary.FileWriter(
-            os.path.join(CHECKPOINT_DIR, args.run_name))
+        summary_writer = tf.summary.FileWriter(args.output_dir)
 
         saver = tf.train.Saver(
             var_list=train_vars,
@@ -289,24 +289,21 @@ def main():
         print('Training...')
 
         counter = 1
-        counter_path = os.path.join(CHECKPOINT_DIR, args.run_name, 'counter')
+        counter_path = os.path.join(args.output_dir, 'counter')
         if os.path.exists(counter_path):
             # Load the step number if we're resuming a run
             # Add 1 so we don't immediately try to save again
             with open(counter_path, 'r') as fp:
                 counter = int(fp.read()) + 1
 
-        maketree(os.path.join(CHECKPOINT_DIR, args.run_name))
+        maketree(args.output_dir)
 
         def save():
-            maketree(os.path.join(CHECKPOINT_DIR, args.run_name))
-            print(
-                'Saving',
-                os.path.join(CHECKPOINT_DIR, args.run_name,
-                             'model-{}').format(counter))
+            maketree(args.output_dir)
+            print(f'Saving {args.output_dir} model-{counter}')
             saver.save(
                 sess,
-                os.path.join(CHECKPOINT_DIR, args.run_name, 'model'),
+                os.path.join(args.output_dir, 'model'),
                 global_step=counter)
             with open(counter_path, 'w') as fp:
                 fp.write(str(counter) + '\n')
