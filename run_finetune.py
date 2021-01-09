@@ -6,12 +6,19 @@ import os
 import numpy as np
 import tensorflow as tf
 import time
-import tqdm
 from copy import copy
 from tensorflow.contrib.training import HParams
 from encode_bpe import BPEEncoder_ja
 import model
 import csv
+
+# for confusion matrix
+from textwrap import wrap
+import re
+import itertools
+import tfplot
+import matplotlib
+from sklearn.metrics import confusion_matrix
 
 CHECKPOINT_DIR = 'checkpoint'
 SAMPLE_DIR = 'samples'
@@ -84,11 +91,57 @@ class Dataset():
         return input_ids, label_ids
 
 
-def evaluate(args, hparams):
-    input_ids, label_ids = load_data_for_classification(args, hparams, 'eval.txt')
+def plot_confusion_matrix(cm, labels, title='Confusion matrix', tensor_name='MyFigure/image'):
+    ''' 
+    Parameters:
+        correct_labels                  : These are your true classification categories.
+        predict_labels                  : These are you predicted classification categories
+        labels                          : This is a lit of labels which will be used to display the axix labels
+        title='Confusion matrix'        : Title for your matrix
+        tensor_name = 'MyFigure/image'  : Name for the output summay tensor
+
+    Returns:
+        summary: TensorFlow summary 
+
+    Other itema to note:
+        - Depending on the number of category and the data , you may have to modify the figzie, font sizes etc. 
+        - Currently, some of the ticks dont line up due to rotations.
+    '''
+    ###fig, ax = matplotlib.figure.Figure()
+
+    fig = matplotlib.figure.Figure(figsize=(7, 7), dpi=320, facecolor='w', edgecolor='k')
+    ax = fig.add_subplot(1, 1, 1)
+    im = ax.imshow(cm, cmap='Oranges')
+
+    classes = [re.sub(r'([a-z](?=[A-Z])|[A-Z](?=[A-Z][a-z]))', r'\1 ', x) for x in labels]
+    classes = ['\n'.join(wrap(l, 40)) for l in classes]
+
+    tick_marks = np.arange(len(classes))
+
+    axis_label_size = 28
+    tick_label_size = 20
+    ax.set_xlabel('Predicted', fontsize=axis_label_size)
+    ax.set_xticks(tick_marks)
+    c = ax.set_xticklabels(classes, fontsize=tick_label_size, rotation=-90,  ha='center')
+    ax.xaxis.set_label_position('bottom')
+    ax.xaxis.tick_bottom()
+
+    ax.set_ylabel('True Label', fontsize=axis_label_size)
+    ax.set_yticks(tick_marks)
+    ax.set_yticklabels(classes, fontsize=tick_label_size, va ='center')
+    ax.yaxis.set_label_position('left')
+    ax.yaxis.tick_left()
+
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        ax.text(j, i, format(cm[i, j], '.2f') if cm[i,j]!=0 else '.', horizontalalignment="center", fontsize=24, verticalalignment='center', color= "black")
+    fig.set_tight_layout(True)
+    summary = tfplot.figure.to_summary(fig, tag=tensor_name)
+    return summary
 
 
 def main():
+    np.set_printoptions(precision=3)
+
     args = parser.parse_args()
 
     if 'small' in args.base_model:
@@ -150,7 +203,8 @@ def main():
         tf.summary.scalar('eval/loss', loss, collections=['eval'])
 
         preds = tf.cast(tf.math.argmax(logits, 1), tf.int32)
-        accuracy= tf.reduce_mean(tf.cast(tf.equal(preds, labels), tf.float32))
+
+        accuracy = tf.reduce_mean(tf.cast(tf.equal(preds, labels), tf.float32))
         tf.summary.scalar('eval/accuracy', accuracy, collections=['eval'])
 
         global_step = tf.Variable(0, trainable=False)
@@ -263,9 +317,10 @@ def main():
         try:
             while True:
                 if counter % args.save_every == 0:
-                    (v_accuracy, v_loss, v_summary) = sess.run(
-                        (accuracy, loss, summaries_eval),
-                        feed_dict=sample_feature(dataset_eval))
+                    feed_dict = sample_feature(dataset_eval)
+                    (v_accuracy, v_loss, v_summary, v_preds) = sess.run(
+                        (accuracy, loss, summaries_eval, preds),
+                        feed_dict=feed_dict)
                     print(
                         '[eval][{counter} | {time:2.2f}] loss={loss:2.2f} acc={acc:2.2f}'
                         .format(
@@ -274,6 +329,19 @@ def main():
                             loss=v_loss,
                             acc=v_accuracy))
                     summary_writer.add_summary(v_summary, counter)
+
+                    index_label_map = {v:k for k,v in LABEL_INDEX_MAP.items()}
+                    all_label_names = list(LABEL_INDEX_MAP.keys())
+                    label_names = [index_label_map[i] for i in feed_dict[labels]]
+                    pred_names = [index_label_map[i] for i in v_preds]
+
+                    cm = confusion_matrix(label_names, pred_names, labels=all_label_names, normalize='true')
+                    print(f'confusion matrix: {all_label_names}')
+                    print(cm)
+
+                    v_summary_cm = plot_confusion_matrix(cm, all_label_names, tensor_name='eval/cm')
+                    summary_writer.add_summary(v_summary_cm, counter)
+
                     save()
 
                 (_, v_loss, v_summary) = sess.run(
