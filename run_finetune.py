@@ -38,8 +38,9 @@ parser.add_argument('--learning_rate', metavar='LR', type=float, default=5e-5, h
 parser.add_argument('--warmup_steps', metavar='WR', type=int, default=0, help='Learning rate warming up steps')
 
 parser.add_argument('--run_name', type=str, default='gpt2ja_finetune', help='Run id. Name of subdirectory in checkpoint/ and samples/')
-parser.add_argument('--save_every', metavar='N', type=int, default=1000, help='Write a checkpoint every N steps')
+parser.add_argument('--eval_every', metavar='N', type=int, default=1000, help='Write a checkpoint every N steps')
 parser.add_argument('--log_every', metavar='N', type=int, default=1, help='print log of training every N steps')
+parser.add_argument('--no_save', action='store_true')
 
 parser.add_argument('--gpu', default='0', help='visible gpu number.')
 
@@ -350,9 +351,10 @@ def main():
 
         try:
             while counter <= args.steps:
-                if counter % args.save_every == 0:
+                if counter % args.eval_every == 0:
                     evaluate()
-                    save()
+                    if not args.no_save:
+                        save()
 
                 (_, v_loss, v_summary) = sess.run(
                     (opt_apply, loss, summaries_train),
