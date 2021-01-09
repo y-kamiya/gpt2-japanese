@@ -37,6 +37,7 @@ parser.add_argument('--warmup_steps', metavar='WR', type=int, default=0, help='L
 
 parser.add_argument('--run_name', type=str, default='gpt2ja_finetune', help='Run id. Name of subdirectory in checkpoint/ and samples/')
 parser.add_argument('--save_every', metavar='N', type=int, default=1000, help='Write a checkpoint every N steps')
+parser.add_argument('--log_every', metavar='N', type=int, default=1, help='print log of training every N steps')
 
 parser.add_argument('--gpu', default='0', help='visible gpu number.')
 
@@ -350,13 +351,14 @@ def main():
                 avg_loss = (avg_loss[0] * 0.99 + v_loss,
                             avg_loss[1] * 0.99 + 1.0)
 
-                print(
-                    '[{counter} | {time:2.2f}] loss={loss:2.2f} avg={avg:2.2f}'
-                    .format(
-                        counter=counter,
-                        time=time.time() - start_time,
-                        loss=v_loss,
-                        avg=avg_loss[0] / avg_loss[1]))
+                if counter % args.log_every == 0:
+                    print(
+                        '[{counter} | {time:2.2f}] loss={loss:2.2f} avg={avg:2.2f}'
+                        .format(
+                            counter=counter,
+                            time=time.time() - start_time,
+                            loss=v_loss,
+                            avg=avg_loss[0] / avg_loss[1]))
 
                 counter = counter+1
                 if args.warmup_steps > 0:
