@@ -46,6 +46,7 @@ parser.add_argument('--gpu', default='0', help='visible gpu number.')
 
 parser.add_argument('--n_sentence_labels', type=int, default=0, help='label num for sentence classification')
 parser.add_argument('--steps', type=int, default=10)
+parser.add_argument('--fp16', action='store_true')
 
 def maketree(path):
     try:
@@ -235,10 +236,12 @@ def main():
         else:
             raise ValueError('invalid optimizer name.')
 
+        if args.fp16:
+            opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
+
         train_vars = tf.trainable_variables()
-        opt_grads = tf.gradients(loss, train_vars)
-        opt_grads = list(zip(opt_grads, train_vars))
-        opt_apply = opt.apply_gradients(opt_grads)
+        grads_and_vars = opt.compute_gradients(loss, train_vars)
+        opt_apply = opt.apply_gradients(grads_and_vars)
 
         summaries_train = tf.summary.merge_all('train')
         summaries_eval = tf.summary.merge_all('eval')
