@@ -13,6 +13,7 @@ import model
 import csv
 import pandas as pd
 from tabulate import tabulate
+import pickle
 
 # for confusion matrix
 from textwrap import wrap
@@ -79,21 +80,33 @@ class Dataset():
         self.hparams = hparams
         self.filename = filename
 
-        self.global_chunks, self.global_label_ids = self.__load_data()
+        data = self.__load_data()
+        self.global_chunks, self.global_label_ids = data['input_ids'], data['label_ids']
         self.global_chunk_index = np.random.permutation(len(self.global_chunks))
         self.global_chunk_step = 0
 
     def __load_data(self):
-        input_ids = []
-        label_ids = []
+        data = {
+            'input_ids': [],
+            'label_ids': [],
+        }
         input_path = os.path.join(self.args.dataroot, self.filename)
+
+        cache_path = f'{input_path}.pickle'
+        if os.path.exists(cache_path):
+            with open(cache_path, 'rb') as fp:
+                return pickle.load(fp)
+
         with open(input_path, 'r') as fp:
             reader = csv.reader(fp, delimiter='\t')
             for text, label in reader:
-                input_ids.append(enc.encode(text)[:self.hparams.n_ctx])
-                label_ids.append(LABEL_INDEX_MAP[label])
+                data['input_ids'].append(enc.encode(text)[:self.hparams.n_ctx])
+                data['label_ids'].append(LABEL_INDEX_MAP[label])
 
-        return input_ids, label_ids
+        with open(cache_path, 'wb') as fp:
+            pickle.dump(data, fp)
+
+        return data
 
     def __len__(self):
         return len(self.global_chunks)
