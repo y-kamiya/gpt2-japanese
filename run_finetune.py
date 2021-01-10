@@ -95,6 +95,9 @@ class Dataset():
 
         return input_ids, label_ids
 
+    def __len__(self):
+        return len(self.global_chunks)
+
 
 def plot_confusion_matrix(cm, labels, title='Confusion matrix', tensor_name='MyFigure/image'):
     ''' 
@@ -206,12 +209,8 @@ def main():
             tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=labels, logits=logits))
         tf.summary.scalar('train/loss', loss, collections=['train'])
-        tf.summary.scalar('eval/loss', loss, collections=['eval'])
 
         preds = tf.cast(tf.math.argmax(logits, 1), tf.int32)
-
-        accuracy = tf.reduce_mean(tf.cast(tf.equal(preds, labels), tf.float32))
-        tf.summary.scalar('eval/accuracy', accuracy, collections=['eval'])
 
         global_step = tf.Variable(0, trainable=False)
         if args.warmup_steps > 0:
@@ -244,7 +243,6 @@ def main():
         opt_apply = opt.apply_gradients(grads_and_vars)
 
         summaries_train = tf.summary.merge_all('train')
-        summaries_eval = tf.summary.merge_all('eval')
         summary_writer = tf.summary.FileWriter(args.output_dir)
 
         saver = tf.train.Saver(
@@ -319,24 +317,23 @@ def main():
         start_time = time.time()
 
         def evaluate():
-            feed_dict = sample_feature(dataset_eval)
-            (v_accuracy, v_loss, v_summary, v_preds) = sess.run(
-                (accuracy, loss, summaries_eval, preds),
-                feed_dict=feed_dict)
-            print(
-                '[eval][{counter} | {time:2.2f}] loss={loss:2.2f} acc={acc:2.2f}'
-                .format(
-                    counter=counter,
-                    time=time.time() - start_time,
-                    loss=v_loss,
-                    acc=v_accuracy))
-            summary_writer.add_summary(v_summary, counter)
-
             index_label_map = {v:k for k,v in LABEL_INDEX_MAP.items()}
-            all_label_names = list(LABEL_INDEX_MAP.keys())
-            label_names = [index_label_map[i] for i in feed_dict[labels]]
-            pred_names = [index_label_map[i] for i in v_preds]
+            eval_labels = []
+            eval_preds = []
+            eval_losses = []
 
+            eval_steps = len(dataset_eval) // args.batch_size
+            for i in range(eval_steps):
+                feed_dict = sample_feature(dataset_eval)
+                (v_loss, v_preds) = sess.run((loss, preds), feed_dict=feed_dict)
+
+                eval_labels.extend(feed_dict[labels])
+                eval_preds.extend(v_preds)
+                eval_losses.append(v_loss)
+
+            label_names = [index_label_map[i] for i in eval_labels]
+            pred_names = [index_label_map[i] for i in eval_preds]
+            all_label_names = list(LABEL_INDEX_MAP.keys())
             cm = metrics.confusion_matrix(label_names, pred_names, labels=all_label_names, normalize='true')
             print(f'confusion matrix: {all_label_names}')
             print(cm)
@@ -344,13 +341,29 @@ def main():
             v_summary_cm = plot_confusion_matrix(cm, all_label_names, tensor_name='eval/cm')
             summary_writer.add_summary(v_summary_cm, counter)
 
-            df = pd.DataFrame(metrics.classification_report(feed_dict[labels], v_preds, output_dict=True))
+            df = pd.DataFrame(metrics.classification_report(eval_labels, eval_preds, output_dict=True))
             print(tabulate(df, headers='keys', tablefmt="github", floatfmt='.2f'))
 
             f1_macro = df.loc['f1-score', 'macro avg']
             summary_writer.add_summary(tf.Summary(value=[
                 tf.Summary.Value(tag='eval/f1_macro', simple_value=f1_macro)
              ]), counter)
+
+            accuracy = df.loc['f1-score', 'accuracy']
+            summary_writer.add_summary(tf.Summary(value=[
+                tf.Summary.Value(tag='eval/accuracy', simple_value=accuracy)
+             ]), counter)
+
+            avg_loss = sum(eval_losses) / eval_steps
+            summary_writer.add_summary(tf.Summary(value=[
+                tf.Summary.Value(tag='eval/loss', simple_value=avg_loss)
+             ]), counter)
+            print(
+                '[eval][{counter} | {time:2.2f}] loss={loss:2.2f}'
+                .format(
+                    counter=counter,
+                    time=time.time() - start_time,
+                    loss=avg_loss))
 
         try:
             while counter <= args.steps:
